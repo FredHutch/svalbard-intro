@@ -87,7 +87,7 @@ authentication.
 - During initialization of the vault, a master key is generated and split into
   5 shards
 - 3 shards are required to unseal.
-  - see [Sharmir's Secret Sharing](https://en.wikipedia.org/wiki/Shamir%27s_Secret_Sharing)
+  - see [Shamir's Secret Sharing](https://en.wikipedia.org/wiki/Shamir%27s_Secret_Sharing)
 - A root token is also created- this should be destroyed after configuring additional roles and tokens assigned to administrators
 
 ???
@@ -154,7 +154,24 @@ Adding `bound_cidr_list` and setting `bind_secret_id` to false allows distributi
 
 # Vault Operations
 
-## Seal/Unseal
+## Access Policies
+
+Policies are a path and then the capabililities on that path, read, write,
+create, update, delete.  Policies can be combined in a token.
+
+```
+path "secret/*" {
+  policy = "write"
+}
+
+path "secret/foo" {
+  policy = "read"
+}
+
+path "auth/token/lookup-self" {
+  policy = "read"
+}
+```
 
 ---
 
