@@ -44,6 +44,17 @@ class: center, middle
 
 ---
 
+# Vault Architecture
+
+[<img src="https://www.vaultproject.io/assets/images/layers-368ccce4.png" style="width: 75%; height: 75%"/>](https://www.vaultproject.io/docs/internals/architecture.html)
+
+> The storage backend is untrusted and is used to durably store encrypted data.
+> When the Vault server is started, it must be provided with a storage backend
+> so that data is available across restarts. The HTTP API similarly must be
+> started by the Vault server on start so that clients can interact with it.
+
+---
+
 # Introducing Svalbard
 
 > _Svalbard_ is the name I'd chosen for this implementation of Vault
@@ -52,42 +63,19 @@ class: center, middle
 
 ---
 
-# Svalbard Components
+# Svalbard's Other Bits
 
-## Consul
+## The Storage Backend
 
-[consul](https://www.consul.io/) is a multi-datacenter capbable system providing service discovery, failure detection, and key/value storage.  Vault uses many of Consul's features to provide a highly-available service
+[consul](https://www.consul.io/) is a multi-datacenter capbable system
+providing service discovery, failure detection, and key/value storage.  Vault
+uses many of Consul's features to provide a highly-available service
 
-I have three Consul servers (really the minimum number required).
+## A Certificate Authority
 
----
-
-# Svalbard Components
-
-## A CA
-
-Consul relies heavily on certificates to provide secure communication between nodes.  The Hutch wildcard doesn't appear to work- hence we need self-signed certificates.
-
-
----
-
-# Svalbard Components
-
-## Vault
-
-Right now just one vault server- a production roll-out will have more, likely spanning data centers.
-
----
-
-# Vault Operations
-
-## Authentication
-
- - Tokens
- - `AppRole`
- - GitHub
- - LDAP/AD
- - Username/Password
+Consul relies on certificates to provide secure communication between nodes as
+well as providing an authentication backend for host or application
+authentication.
 
 ---
 
@@ -100,6 +88,7 @@ Right now just one vault server- a production roll-out will have more, likely sp
   5 shards
 - 3 shards are required to unseal.
   - see [Sharmir's Secret Sharing](https://en.wikipedia.org/wiki/Shamir%27s_Secret_Sharing)
+- A root token is also created- this should be destroyed after configuring additional roles and tokens assigned to administrators
 
 ???
 
@@ -112,7 +101,54 @@ Right now just one vault server- a production roll-out will have more, likely sp
 
 # Vault Operations
 
-## Seal/Unseal
+ - Authenticate (login) via connected authentication backend
+ - Receive a token which is attached to an access policy
+ - Provide token with a request for information on a path
+ - Assuming access policy on token allows, return secret
+
+<img src="img/vault-get-secret.svg"/>
+???
+All operations (even the `vault` command) use HTTP API
+
+Access is driven from tokens
+ - enables RBAC to secrets &c
+ - enables expiring and revoking access to secrets
+ - since tokens do expire, refreshing is a necessary part of the workflow
+
+---
+
+# Vault Operations
+
+## Authentication Backends
+
+  - Many Options:
+    - Tokens
+    - AppRole\*
+    - GitHub
+    - LDAP/AD
+    - Username/Password
+
+
+---
+
+# Vault Operations
+
+## AppRole Authentication
+
+> [... allows machines and services (apps) to authenticate with Vault via a series of administratively defined roles: AppRoles (https://www.vaultproject.io/docs/auth/approle.html)](https://www.vaultproject.io/docs/auth/approle.html)
+
+ - A role is created that has an access policy attached to it
+ - A secret ID is then created using the role ID
+ - The secret and role IDs are then used by the client to authenticate
+ - Vault provides a token with the role's policy to the client which is then
+   used for accessing secrets
+ - Access to a role can also be restricted to a CIDR range
+
+<img src="img/approle-auth.svg"/>
+
+???
+
+Adding `bound_cidr_list` and setting `bind_secret_id` to false allows distribution to IP ranges using only the role ID
 
 ---
 
