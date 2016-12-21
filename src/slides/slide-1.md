@@ -156,8 +156,7 @@ Adding `bound_cidr_list` and setting `bind_secret_id` to false allows distributi
 
 ## Access Policies
 
-Policies are a path and then the capabililities on that path, read, write,
-create, update, delete.  Policies can be combined in a token.
+Policies are a path and then the capabililities on that path: create, delete,list, read, update.  Tokens can have multiple policies.
 
 ```
 path "secret/*" {
@@ -175,13 +174,218 @@ path "auth/token/lookup-self" {
 
 ---
 
-# Vault Operations
+# Using Vault - AppRole
 
-## Seal/Unseal
+I've configured a policy and role both named "core" which could be used for
+storing essential, but not particularly sensitive, information (e.g. DNS
+servers and other domain-local information)
+
+```
+root@sv-vault-srv01# vault read auth/approle/role/core        
+Key                     Value
+---                     -----
+bind_secret_id          false
+bound_cidr_list         140.107.0.0/16
+period                  0
+policies                [core default]
+secret_id_num_uses      0
+secret_id_ttl           0
+token_max_ttl           0
+token_ttl               0
+```
 
 ---
 
-# Vault Operations
+# Using Vault - AppRole
 
-## Seal/Unseal
+This policy creates read access for paths `secret/core` and anything created
+underneath that point
 
+```
+root@sv-vault-srv01# vault policies core
+path "secret/core*" {
+  capabilities = ["read"]
+}
+path "secret/core/*" {
+  capabilities = ["read"]
+}
+```
+
+`default` has a bunch of required privileges:
+
+```
+# Allow tokens to look up their own properties
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+
+# Allow tokens to renew themselves
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+...
+```
+---
+
+# Using Vault - AppRole
+
+Managing secrets in this path requires more security.  Here I've configured an
+admin role requiring the generation of a secret ID and that the login comes
+from a particular host
+
+```
+root@sv-vault-srv01# vault read auth/approle/role/core-admin
+Key                     Value
+---                     -----
+bind_secret_id          true
+bound_cidr_list         140.107.72.78/32
+period                  0
+policies                [core-admin default]
+secret_id_num_uses      0
+secret_id_ttl           30m
+token_max_ttl           0
+token_ttl               0
+```
+
+---
+
+# Using Vault - AppRole
+
+The policy for this role has considerably more privileges:
+
+```
+root@sv-vault-srv01# vault policies core-admin
+path "secret/core*" {
+  capabilities = ["list","update","delete","create","read"]
+}
+path "secret/core/*" {
+  capabilities = ["list","update","delete","create","read"]
+}
+```
+
+---
+
+# Using Vault - AppRole
+
+The `role_id` is known.  The `core` role doesn't require a secret ID:
+
+```
+talos$ curl -X POST -d '{"role_id": "78b1f875-37b7-ed5b-aebc-ad5180f44264"}'\
+> ${VAULT_ADDR}/v1/auth/approle/login |prettyjson
+{
+    "auth": {
+        "accessor": "1efc2cae-f0d8-6664-77e4-926f280f2bf2",
+        "client_token": "08a293df-be19-2c7b-2043-2f1ead0bf57e",
+        "lease_duration": 2764800,
+        "metadata": null,
+        "policies": [
+            "core",
+            "default"
+        ],
+        "renewable": true
+    },
+    "data": null,
+    "lease_duration": 0,
+    "lease_id": "",
+    "renewable": false,
+    "request_id": "9e2bcf54-d36d-8cd9-23de-3f80bd258418",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+---
+
+# Using Vault - AppRole
+
+`client_token` is then used to get a secret:
+
+```
+mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" \
+>   ${VAULT_ADDR}/v1/secret/core/dallas |prettyjson
+{
+    "auth": null,
+    "data": {
+        "who shot jr": "hoffa did it"
+    },
+    "lease_duration": 2764800,
+    "lease_id": "",
+    "renewable": false,
+    "request_id": "966a7df7-bfde-a468-ec98-ac88ddf1765a",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+
+---
+
+# Using Vault - AppRole
+
+This token can't update the secret:
+
+```
+mrg@talos$ curl -X POST -d '{"hoovers dress size":"12"}' \
+> -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core | prettyjson
+{
+    "errors": [
+        "permission denied"
+    ]
+}
+```
+
+We need to log in with the `core-admin` role
+
+---
+
+# Using Vault - AppRole
+
+```
+mrg@talos$ curl -X POST \
+> -d '{"role_id":"0c711651-4f20-4b32-9192-0b73ec9ebb7a","secret_id":"73b1cce6-448e-dff0-bd24-2a4783fe221d"}'\
+> ${VAULT_ADDR}/v1/auth/approle/login |prettyjson
+{
+    "auth": {
+        "accessor": "bc4677df-19d7-3d0d-877d-16b7de7a90ce",
+        "client_token": "76a458cc-7be8-1613-00bd-552967b6fd33",
+        "lease_duration": 2764800,
+        "metadata": {},
+        "policies": [
+            "core-admin",
+            "default"
+        ],
+        "renewable": true
+    },
+    "data": null,
+    "lease_duration": 0,
+    "lease_id": "",
+    "renewable": false,
+    "request_id": "5ebccee7-c9c8-024a-c307-43149df4f7d2",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+
+---
+
+# Using Vault - AppRole
+
+The token can then be used to write to those paths:
+
+```
+mrg@talos$  export VAULT_TOKEN=76a458cc-7be8-1613-00bd-552967b6fd33
+mrg@talos$ curl -X POST -d '{"hoovers dress size":"10"}' -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core
+mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core |prettyjson 
+{
+    "auth": null,
+    "data": {
+        "hoovers dress size": "10"
+    },
+    "lease_duration": 2764800,
+    "lease_id": "",
+    "renewable": false,
+    "request_id": "17ef00b9-f7d4-a4f2-b19c-196430169e41",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+
+---
