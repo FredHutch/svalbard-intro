@@ -61,6 +61,11 @@ class: center, middle
 
 [<img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/Svalbard_seed_vault_IMG_8894.JPG" style="width: 50%; height: 50%"/>](https://www.regjeringen.no/en/topics/food-fisheries-and-agriculture/landbruk/svalbard-global-seed-vault/id462220/)
 
+> Way up north, in the permafrost, 1300 kilometers beyond the Arctic Circle, is
+> the world's largest secure seed storage, opened by the Norwegian Government
+> in February 2008. From all across the globe, crates of seeds are sent here
+> for safe and secure long-term storage in cold and dry rock vaults.
+
 ---
 
 # Svalbard's Other Bits
@@ -76,6 +81,12 @@ uses many of Consul's features to provide a highly-available service
 Consul relies on certificates to provide secure communication between nodes as
 well as providing an authentication backend for host or application
 authentication.
+
+???
+
+* A CA is required to ensure that specific _hosts_ can be authenticated.  The
+wildcard cert provides no such assurances.
+* The cert needs to provide multiple DNS names and the IP address
 
 ---
 
@@ -122,12 +133,18 @@ Access is driven from tokens
 ## Authentication Backends
 
   - Many Options:
-    - Tokens
-    - AppRole\*
+    - Tokens \*
+    - AppRole \*
     - GitHub
     - LDAP/AD
     - Username/Password
 
+\* currently active in Svalbard
+
+???
+
+* LDAP/AD for carbon-based life forms
+* AppRole and Tokens for software and services
 
 ---
 
@@ -154,9 +171,27 @@ Adding `bound_cidr_list` and setting `bind_secret_id` to false allows distributi
 
 # Vault Operations
 
+## Token Authentication
+
+* Token authentication is at the root of every authentication backend (i.e. other backends create tokens using this backend).
+* A `root` token is initially created- "best practice" recommends against keeping this token
+* Tokens are heirarchical (i.e. revocation of a parent removes children)
+* Distribution of tokens still a challenge
+
+???
+
+* Tokens created with this backend need to be handled like traditional secrets
+* Can be used by external services to create tokens dynamically
+
+
+
+---
+
+# Vault Operations
+
 ## Access Policies
 
-Policies are a path and then the capabililities on that path: create, delete,list, read, update.  Tokens can have multiple policies.
+A policy is the composition of a path and the capabililities on that path assigned to a token. Tokens can have multiple policies.
 
 ```
 path "secret/*" {
@@ -214,16 +249,15 @@ path "secret/core/*" {
 `default` has a bunch of required privileges:
 
 ```
+root@sv-vault-srv01# vault policies default
 # Allow tokens to look up their own properties
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
-
 # Allow tokens to renew themselves
 path "auth/token/renew-self" {
   capabilities = ["update"]
 }
-...
 ```
 ---
 
@@ -267,10 +301,11 @@ path "secret/core/*" {
 
 # Using Vault - AppRole
 
-The `role_id` is known.  The `core` role doesn't require a secret ID:
+The `role_id` is set to the friendly name of "core".  The `core` role doesn't
+require a secret ID:
 
 ```
-talos$ curl -X POST -d '{"role_id": "78b1f875-37b7-ed5b-aebc-ad5180f44264"}'\
+talos$ curl -X POST -d '{"role_id": "core"}'\
 > ${VAULT_ADDR}/v1/auth/approle/login |prettyjson
 {
     "auth": {
@@ -285,14 +320,14 @@ talos$ curl -X POST -d '{"role_id": "78b1f875-37b7-ed5b-aebc-ad5180f44264"}'\
         "renewable": true
     },
     "data": null,
-    "lease_duration": 0,
-    "lease_id": "",
-    "renewable": false,
-    "request_id": "9e2bcf54-d36d-8cd9-23de-3f80bd258418",
-    "warnings": null,
-    "wrap_info": null
+    ...
 }
 ```
+???
+
+* `prettyjson` is an alias for `python -m json.tool`
+* the `role_id` is usually a guuid, can be set using `vault write auth/approle/role/core role_id=<some string>`
+
 ---
 
 # Using Vault - AppRole
@@ -332,7 +367,25 @@ mrg@talos$ curl -X POST -d '{"hoovers dress size":"12"}' \
 }
 ```
 
-We need to log in with the `core-admin` role
+We need to get a secret-id for the _core-admin_ role which is then used to log in:
+
+```
+mrg@talos$ curl -X POST -d '{"role_id":"core-admin"}' \
+> -H "X-Vault-Token:${VAULT_TOKEN}" \
+> ${VAULT_ADDR}/v1/auth/approle/role/core-admin/secret-id |prettyjson
+{
+    "auth": null,
+    "data": {
+        "secret_id": "008bf2cf-6551-05a4-7f73-3ab9fe2cf0e7",
+        "secret_id_accessor": "b5f174ec-6390-faf3-3761-df5ae1baa557"
+    },
+        ...
+
+```
+
+???
+
+* Typically we'd use a username/password type scheme as this role is for humans- logging in with the username and password
 
 ---
 
@@ -340,7 +393,7 @@ We need to log in with the `core-admin` role
 
 ```
 mrg@talos$ curl -X POST \
-> -d '{"role_id":"0c711651-4f20-4b32-9192-0b73ec9ebb7a","secret_id":"73b1cce6-448e-dff0-bd24-2a4783fe221d"}'\
+> -d '{"role_id":"core-admin","secret_id":"73b1cce6-448e-dff0-bd24-2a4783fe221d"}'\
 > ${VAULT_ADDR}/v1/auth/approle/login |prettyjson
 {
     "auth": {
@@ -354,14 +407,7 @@ mrg@talos$ curl -X POST \
         ],
         "renewable": true
     },
-    "data": null,
-    "lease_duration": 0,
-    "lease_id": "",
-    "renewable": false,
-    "request_id": "5ebccee7-c9c8-024a-c307-43149df4f7d2",
-    "warnings": null,
-    "wrap_info": null
-}
+    ...
 ```
 
 ---
@@ -372,8 +418,10 @@ The token can then be used to write to those paths:
 
 ```
 mrg@talos$  export VAULT_TOKEN=76a458cc-7be8-1613-00bd-552967b6fd33
-mrg@talos$ curl -X POST -d '{"hoovers dress size":"10"}' -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core
-mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core |prettyjson 
+mrg@talos$ curl -X POST -d '{"hoovers dress size":"10"}' \
+> -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core
+mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" \
+${VAULT_ADDR}/v1/secret/core |prettyjson 
 {
     "auth": null,
     "data": {
@@ -387,5 +435,9 @@ mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/c
     "wrap_info": null
 }
 ```
+
+???
+
+* No, the leading space in front of the `export` command isn't a typo- it's there to prevent the token from being stored in the history file
 
 ---

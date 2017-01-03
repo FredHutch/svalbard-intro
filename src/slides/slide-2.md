@@ -1,6 +1,4 @@
-# Using Vault - Other Authentications
-
-## Username/Password
+# Other Authentications - Username/Password
 
 A username and password pair are used to log in:
 
@@ -22,16 +20,41 @@ mrg@talos$ curl $VAULT_ADDR/v1/auth/userpass/login/mrg \
         "renewable": true
     },
     ...
-}
+```
+
+???
+
+* note that this token has the _core-admin_ policy attached- it can be used to update tokens.
+
+---
+
+# Other Authentications - Username/Password
+
+Alternatively, using the Vault CLI:
+
+```
+mrg@sv-vault-srv01:/opt/svalbard/vault$ vault auth -method=userpass \
+> username=mrg \
+> password=letmein
+==> WARNING: VAULT_TOKEN environment variable set!
+
+  The environment variable takes precedence over the value
+  set by the auth command. Either update the value of the
+  environment variable or unset it to use the new token.
+
+Successfully authenticated! You are now logged in.
+The token below is already saved in the session. You do not
+need to "vault auth" again with the token.
+token: 2831040b-d816-41ad-7f88-2156f739cf36
+token_duration: 86404
+token_policies: [aws-all-access core-admin default]
 ```
 
 ---
 
-# Using Vault - Other Authentications
+# Other Authentications - TLS
 
-## TLS
-
-Store a CA certificate in `auth/cert/certs/\<name\>`.  Any certificate that can
+Store a CA certificate in `auth/cert/certs/<name>`.  Any certificate that can
 be verified by this CA can be used to login to this endpoint
 
 ```
