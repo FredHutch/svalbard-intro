@@ -79,7 +79,7 @@ mrg@talos$ curl --key /var/tmp/sv-vault-srv01.key --cert /var/tmp/sv-vault-srv01
 
 ---
 
-# Using Vault - Other Authentications
+# Other Authentications - and the rest
 
 ## LDAP
 
@@ -91,9 +91,25 @@ mrg@talos$ curl --key /var/tmp/sv-vault-srv01.key --cert /var/tmp/sv-vault-srv01
  - Personal access tokens are used for login
  - GitHub teams are mapped to policy lists
 
-## et alia
+## Token
 
-MFA, EC2, Token
+ - Create a token attached to a policy
+ - Pass out the token to the service/server/etc.
 
 ---
 
+# Other Authentications - and the rest
+
+## MFA
+
+  - Adds MFA to _userpass_ and _ldap/ad_ authentication backends
+  - Only [duo](https://duo.com/) supported at the moment
+
+## AWS EC2
+
+  - an "introduction mechanism" using AWS EC2 metadata for
+    authorizing instances
+  - Vault verifies signature on the encrypted & signed metadata
+  - Highly complicated and configurable dance!
+
+---

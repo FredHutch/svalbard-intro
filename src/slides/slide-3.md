@@ -1,6 +1,25 @@
+
 # Other Secret Backends
 
-## AWS
+Vault can be used for generation of secrets beyond the archetypal key/value secrets we've been storing:
+
+ * AWS
+ * Cassandra
+ * Consul
+ * Cubbyhole
+ * MongoDB
+ * MSSQL
+ * MySQL
+ * PKI
+ * PostgreSQL
+ * RabbitMQ
+ * SSH
+ * Transit
+ * Custom
+
+---
+
+# Other Secret Backends - AWS
 
 > The AWS secret backend for Vault generates AWS access credentials dynamically
 > based on IAM policies. This makes IAM much easier to use: credentials could
@@ -14,9 +33,7 @@
 
 ---
 
-# Other Secret Backends
-
-## AWS
+# Other Secret Backends - AWS
 
 ```
 mrg@talos$ curl -X GET \
@@ -40,14 +57,36 @@ mrg@talos$ curl -X GET \
 
 ---
 
- # Other Secret Backends
-
- ## PKI
+# Other Secret Backends - PKI
 
  The PKI backend allows us to generate certificates based on roles
 
   - Configure the backend with a signing CA
   - Configure a role based on the CA certificate
   - Write/Post to the role endpoint and a certificate and key are returned
+  - Temporary/ephemeral certificates for websites & services
 
 
+---
+
+# Other Secret Backends - SSH
+
+> Vault SSH backend dynamically generates SSH credentials for remote hosts.
+> This increases security by removing the need to share private keys with all
+> users needing access to infrastructure. It also solves the problem of
+> management and distribution of keys belonging to remote hosts.
+
+---
+
+# Other Secret Backends - PostgreSQL
+
+> The PostgreSQL secret backend for Vault generates database credentials
+> dynamically based on configured roles. This means that services that need to
+> access a database no longer need to hardcode credentials: they can request
+> them from Vault, and use Vault's leasing mechanism to more easily roll keys.
+
+ - configure credentials on server with `GRANT OPTION` privilege
+ - configure Vault with those credentials
+ - uses PostgreSQL `VALID UNTIL` to enforce leases on the server
+
+---
