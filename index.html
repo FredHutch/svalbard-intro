@@ -73,6 +73,11 @@
 
 [<img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/Svalbard_seed_vault_IMG_8894.JPG" style="width: 50%; height: 50%"/>](https://www.regjeringen.no/en/topics/food-fisheries-and-agriculture/landbruk/svalbard-global-seed-vault/id462220/)
 
+> Way up north, in the permafrost, 1300 kilometers beyond the Arctic Circle, is
+> the world's largest secure seed storage, opened by the Norwegian Government
+> in February 2008. From all across the globe, crates of seeds are sent here
+> for safe and secure long-term storage in cold and dry rock vaults.
+
 ---
 
 # Svalbard's Other Bits
@@ -88,6 +93,12 @@ uses many of Consul's features to provide a highly-available service
 Consul relies on certificates to provide secure communication between nodes as
 well as providing an authentication backend for host or application
 authentication.
+
+???
+
+* A CA is required to ensure that specific _hosts_ can be authenticated.  The
+wildcard cert provides no such assurances.
+* The cert needs to provide multiple DNS names and the IP address
 
 ---
 
@@ -134,12 +145,18 @@ Access is driven from tokens
 ## Authentication Backends
 
   - Many Options:
-    - Tokens
-    - AppRole\*
+    - Tokens \*
+    - AppRole \*
     - GitHub
     - LDAP/AD
     - Username/Password
 
+\* currently active in Svalbard
+
+???
+
+* LDAP/AD for carbon-based life forms
+* AppRole and Tokens for software and services
 
 ---
 
@@ -166,10 +183,27 @@ Adding `bound_cidr_list` and setting `bind_secret_id` to false allows distributi
 
 # Vault Operations
 
+## Token Authentication
+
+* Token authentication is at the root of every authentication backend (i.e. other backends create tokens using this backend).
+* A `root` token is initially created- "best practice" recommends against keeping this token
+* Tokens are heirarchical (i.e. revocation of a parent removes children)
+* Distribution of tokens still a challenge
+
+???
+
+* Tokens created with this backend need to be handled like traditional secrets
+* Can be used by external services to create tokens dynamically
+
+
+
+---
+
+# Vault Operations
+
 ## Access Policies
 
-Policies are a path and then the capabililities on that path, read, write,
-create, update, delete.  Policies can be combined in a token.
+A policy is the composition of a path and the capabililities on that path assigned to a token. Tokens can have multiple policies.
 
 ```
 path "secret/*" {
@@ -187,24 +221,532 @@ path "auth/token/lookup-self" {
 
 ---
 
-# Vault Operations
+# Using Vault - AppRole
 
-## Seal/Unseal
+I've configured a policy and role both named "core" which could be used for
+storing essential, but not particularly sensitive, information (e.g. DNS
+servers and other domain-local information)
+
+```
+root@sv-vault-srv01# vault read auth/approle/role/core        
+Key                     Value
+---                     -----
+bind_secret_id          false
+bound_cidr_list         140.107.0.0/16
+period                  0
+policies                [core default]
+secret_id_num_uses      0
+secret_id_ttl           0
+token_max_ttl           0
+token_ttl               0
+```
 
 ---
 
-# Vault Operations
+# Using Vault - AppRole
 
-## Seal/Unseal
+This policy creates read access for paths `secret/core` and anything created
+underneath that point
 
-# Agenda
+```
+root@sv-vault-srv01# vault policies core
+path "secret/core*" {
+  capabilities = ["read"]
+}
+path "secret/core/*" {
+  capabilities = ["read"]
+}
+```
 
-1. Introduction
-2. Deep-dive
-3. ...
+`default` has a bunch of required privileges:
+
+```
+root@sv-vault-srv01# vault policies default
+# Allow tokens to look up their own properties
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+# Allow tokens to renew themselves
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+```
+---
+
+# Using Vault - AppRole
+
+Managing secrets in this path requires more security.  Here I've configured an
+admin role requiring the generation of a secret ID and that the login comes
+from a particular host
+
+```
+root@sv-vault-srv01# vault read auth/approle/role/core-admin
+Key                     Value
+---                     -----
+bind_secret_id          true
+bound_cidr_list         140.107.72.78/32
+period                  0
+policies                [core-admin default]
+secret_id_num_uses      0
+secret_id_ttl           30m
+token_max_ttl           0
+token_ttl               0
+```
 
 ---
-# Introduction
+
+# Using Vault - AppRole
+
+The policy for this role has considerably more privileges:
+
+```
+root@sv-vault-srv01# vault policies core-admin
+path "secret/core*" {
+  capabilities = ["list","update","delete","create","read"]
+}
+path "secret/core/*" {
+  capabilities = ["list","update","delete","create","read"]
+}
+```
+
+---
+
+# Using Vault - AppRole
+
+The `role_id` is set to the friendly name of "core".  The `core` role doesn't
+require a secret ID:
+
+```
+talos$ curl -X POST -d '{"role_id": "core"}'\
+> ${VAULT_ADDR}/v1/auth/approle/login |prettyjson
+{
+    "auth": {
+        "accessor": "1efc2cae-f0d8-6664-77e4-926f280f2bf2",
+        "client_token": "08a293df-be19-2c7b-2043-2f1ead0bf57e",
+        "lease_duration": 2764800,
+        "metadata": null,
+        "policies": [
+            "core",
+            "default"
+        ],
+        "renewable": true
+    },
+    "data": null,
+    ...
+}
+```
+???
+
+* `prettyjson` is an alias for `python -m json.tool`
+* the `role_id` is usually a guuid, can be set using `vault write auth/approle/role/core role_id=<some string>`
+
+---
+
+# Using Vault - AppRole
+
+`client_token` is then used to get a secret:
+
+```
+mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" \
+>   ${VAULT_ADDR}/v1/secret/core/dallas |prettyjson
+{
+    "auth": null,
+    "data": {
+        "who shot jr": "hoffa did it"
+    },
+    "lease_duration": 2764800,
+    "lease_id": "",
+    "renewable": false,
+    "request_id": "966a7df7-bfde-a468-ec98-ac88ddf1765a",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+
+---
+
+# Using Vault - AppRole
+
+This token can't update the secret:
+
+```
+mrg@talos$ curl -X POST -d '{"hoovers dress size":"12"}' \
+> -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core | prettyjson
+{
+    "errors": [
+        "permission denied"
+    ]
+}
+```
+
+We need to get a secret-id for the _core-admin_ role which is then used to log in:
+
+```
+mrg@talos$ curl -X POST -d '{"role_id":"core-admin"}' \
+> -H "X-Vault-Token:${VAULT_TOKEN}" \
+> ${VAULT_ADDR}/v1/auth/approle/role/core-admin/secret-id |prettyjson
+{
+    "auth": null,
+    "data": {
+        "secret_id": "008bf2cf-6551-05a4-7f73-3ab9fe2cf0e7",
+        "secret_id_accessor": "b5f174ec-6390-faf3-3761-df5ae1baa557"
+    },
+        ...
+
+```
+
+???
+
+* Typically we'd use a username/password type scheme as this role is for humans- logging in with the username and password
+
+---
+
+# Using Vault - AppRole
+
+```
+mrg@talos$ curl -X POST \
+> -d '{"role_id":"core-admin","secret_id":"73b1cce6-448e-dff0-bd24-2a4783fe221d"}'\
+> ${VAULT_ADDR}/v1/auth/approle/login |prettyjson
+{
+    "auth": {
+        "accessor": "bc4677df-19d7-3d0d-877d-16b7de7a90ce",
+        "client_token": "76a458cc-7be8-1613-00bd-552967b6fd33",
+        "lease_duration": 2764800,
+        "metadata": {},
+        "policies": [
+            "core-admin",
+            "default"
+        ],
+        "renewable": true
+    },
+    ...
+```
+
+---
+
+# Using Vault - AppRole
+
+The token can then be used to write to those paths:
+
+```
+mrg@talos$  export VAULT_TOKEN=76a458cc-7be8-1613-00bd-552967b6fd33
+mrg@talos$ curl -X POST -d '{"hoovers dress size":"10"}' \
+> -H "X-Vault-Token:$VAULT_TOKEN" ${VAULT_ADDR}/v1/secret/core
+mrg@talos$ curl -X GET -H "X-Vault-Token:$VAULT_TOKEN" \
+${VAULT_ADDR}/v1/secret/core |prettyjson 
+{
+    "auth": null,
+    "data": {
+        "hoovers dress size": "10"
+    },
+    "lease_duration": 2764800,
+    "lease_id": "",
+    "renewable": false,
+    "request_id": "17ef00b9-f7d4-a4f2-b19c-196430169e41",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+
+???
+
+* No, the leading space in front of the `export` command isn't a typo- it's there to prevent the token from being stored in the history file
+
+---
+# Other Authentications - Username/Password
+
+A username and password pair are used to log in:
+
+```
+mrg@talos$ curl $VAULT_ADDR/v1/auth/userpass/login/mrg \
+> -d '{"password":"letmein"}'  |prettyjson 
+{
+    "auth": {
+        "accessor": "21168915-6d5e-00ee-2ca9-804c48d25999",
+        "client_token": "e4638b3c-f49b-e701-c8f6-3c1cd6861afe",
+        "lease_duration": 86700,
+        "metadata": {
+            "username": "mrg"
+        },
+        "policies": [
+            "core-admin",
+            "default"
+        ],
+        "renewable": true
+    },
+    ...
+```
+
+???
+
+* note that this token has the _core-admin_ policy attached- it can be used to update tokens.
+
+---
+
+# Other Authentications - Username/Password
+
+Alternatively, using the Vault CLI:
+
+```
+mrg@sv-vault-srv01:/opt/svalbard/vault$ vault auth -method=userpass \
+> username=mrg \
+> password=letmein
+==> WARNING: VAULT_TOKEN environment variable set!
+
+  The environment variable takes precedence over the value
+  set by the auth command. Either update the value of the
+  environment variable or unset it to use the new token.
+
+Successfully authenticated! You are now logged in.
+The token below is already saved in the session. You do not
+need to "vault auth" again with the token.
+token: 2831040b-d816-41ad-7f88-2156f739cf36
+token_duration: 86404
+token_policies: [aws-all-access core-admin default]
+```
+
+---
+
+# Other Authentications - TLS
+
+Store a CA certificate in `auth/cert/certs/<name>`.  Any certificate that can
+be verified by this CA can be used to login to this endpoint
+
+```
+
+mrg@talos$ curl --key /var/tmp/sv-vault-srv01.key --cert /var/tmp/sv-vault-srv01.pem -X POST ${VAULT_ADDR}/v1/auth/cert/login |prettyjson 
+{
+    "auth": {
+        "accessor": "4f9345c3-9f14-6584-de90-3a4a333d7af0",
+        "client_token": "5372a885-2af8-4b8f-f856-b169d7227cb4",
+        "lease_duration": 2764800,
+        "metadata": {
+            "authority_key_id": "99:0f:66:ea:8b:61:da:45:c5:f0:ff:c0:7b:f9:4f:14:b7:85:e8:0a",
+            "cert_name": "svalbard",
+            "common_name": "sv-vault-srv01.fhcrc.org",
+            "subject_key_id": "f9:e3:84:f9:31:2f:91:43:e9:c7:de:43:e5:36:3d:b7:6b:0d:df:0c"
+        },
+        "policies": [
+            "core",
+            "default"
+        ],
+```
+
+---
+
+# Other Authentications - and the rest
+
+## LDAP
+
+ - Bind Vault to an LDAP/Active Directory server.
+ - Map Users and Groups to policy lists
+
+## GitHub
+
+ - Personal access tokens are used for login
+ - GitHub teams are mapped to policy lists
+
+## Token
+
+ - Create a token attached to a policy
+ - Pass out the token to the service/server/etc.
+
+---
+
+# Other Authentications - and the rest
+
+## MFA
+
+  - Adds MFA to _userpass_ and _ldap/ad_ authentication backends
+  - Only [duo](https://duo.com/) supported at the moment
+
+## AWS EC2
+
+  - an "introduction mechanism" using AWS EC2 metadata for
+    authorizing instances
+  - Vault verifies signature on the encrypted & signed metadata
+  - Highly complicated and configurable dance!
+
+---
+
+# Other Secret Backends
+
+Vault can be used for generation of secrets beyond the archetypal key/value secrets we've been storing:
+
+ * AWS
+ * Cassandra
+ * Consul
+ * Cubbyhole
+ * MongoDB
+ * MSSQL
+ * MySQL
+ * PKI
+ * PostgreSQL
+ * RabbitMQ
+ * SSH
+ * Transit
+ * Custom
+
+---
+
+# Other Secret Backends - AWS
+
+> The AWS secret backend for Vault generates AWS access credentials dynamically
+> based on IAM policies. This makes IAM much easier to use: credentials could
+> be generated on the fly, and are automatically revoked when the Vault lease
+> is expired.
+
+ - The endpoint is configured with the access and secret keys used to manage
+   IAM credentials as well as the AWS region
+ - A role is created with an IAM policy to be used when accessed
+ - When the endpoint is read, an access and secret key for AWS is created.
+
+---
+
+# Other Secret Backends - AWS
+
+```
+mrg@talos$ curl -X GET \
+> -H "X-Vault-Token:$VAULT_TOKEN" \
+> ${VAULT_ADDR}/v1/aws/creds/ec2readonly |prettyjson 
+{
+    "auth": null,
+    "data": {
+        "access_key": "AKIAIPWHLD6HD4AC3UYA",
+        "secret_key": "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",
+        "security_token": null
+    },
+    "lease_duration": 3600,
+    "lease_id": "aws/creds/ec2readonly/b149fdb3-43b3-6d17-d56f-63593c15bd68",
+    "renewable": true,
+    "request_id": "9f8f00ed-c63c-0641-2592-3841fb3c595f",
+    "warnings": null,
+    "wrap_info": null
+}
+```
+
+---
+
+# Other Secret Backends - PKI
+
+ The PKI backend allows us to generate certificates based on roles
+
+  - Configure the backend with a signing CA
+  - Configure a role based on the CA certificate
+  - Write/Post to the role endpoint and a certificate and key are returned
+  - Temporary/ephemeral certificates for websites & services
+
+
+---
+
+# Other Secret Backends - SSH
+
+> Vault SSH backend dynamically generates SSH credentials for remote hosts.
+> This increases security by removing the need to share private keys with all
+> users needing access to infrastructure. It also solves the problem of
+> management and distribution of keys belonging to remote hosts.
+
+---
+
+# Other Secret Backends - PostgreSQL
+
+> The PostgreSQL secret backend for Vault generates database credentials
+> dynamically based on configured roles. This means that services that need to
+> access a database no longer need to hardcode credentials: they can request
+> them from Vault, and use Vault's leasing mechanism to more easily roll keys.
+
+ - configure credentials on server with `GRANT OPTION` privilege
+ - configure Vault with those credentials
+ - uses PostgreSQL `VALID UNTIL` to enforce leases on the server
+
+---
+# Auditing
+
+ * Vault maintains a record of every interaction
+ * Store in a file or syslog (then to Splunk if desired)
+ * Multiple audit backends are allowed
+ * Secrets are hashed in the audit log
+
+---
+
+# Vault Libraries
+
+ * _Go_ and _Ruby_ libraries are officially supported
+ * _Python_, _C#_, _Node.js_ are just three of the community supported
+ * [Full List](https://www.vaultproject.io/docs/http/libraries.html)
+
+---
+
+# Python's HVAC Library
+
+```
+import hvac
+
+# Using plaintext
+client = hvac.Client()
+client = hvac.Client(url='http://localhost:8200')
+client = hvac.Client(
+           url='http://localhost:8200',
+           token=os.environ['VAULT_TOKEN']
+         )
+client.write('secret/foo', baz='bar', lease='1h')
+print(client.read('secret/foo'))
+client.delete('secret/foo')
+```
+
+---
+
+# Wrap Up
+
+ * Secrets are *hard*
+ * Managing secrets is not encrypting- managing access and authentication is
+ * Moving to cloud computing only exacerbates complexities
+ * What seems like overkill today may be tomorrows base functionality
+
+## Value of Vault
+
+ * Strong multipart encryption of secrets
+   * No one person with complete access (if desired)
+ * Well-thought-out authentication schemes
+ * Ephemeral secret generation and management
+
+???
+
+ * The ephemeral secrets are what I'd consider the "next generation" of secret
+   management.  Services are only given access when needed, access removed when
+   complete.  No reuse
+
+---
+
+# Versus Chef Vault
+
+  * Chef Vault is only a key/value store
+  * Administrative access controls are likely sufficient
+  * Client certificate is used for authentication
+  * Integrated nicely with configuration management
+  * Limited management of secrets, simply access control
+  * No expiry, no advanced secrets (e.g. Postgres credential generation)
+
+---
+
+# Versus AWS Key Management Service
+
+  * KMS only stores cryptographic keys
+  * Not designed for storing the secret itself (but could be used for managing
+    access)
+
+---
+
+# Versus Keywhiz (Square)
+
+  * Also designed for comprehensive secret management
+  * Cookie or certificate based access control
+  * API, CLI, or management web interface interactions
+  * Can mount secrets via FUSE using Unix ACL for access control
+  * Much more in line with Chef Vault in execution
+  * No apparent mechanism for ephemeral secrets or managing service secrets
+
+
 
     </textarea>
     <script src="https://gnab.github.io/remark/downloads/remark-latest.min.js"></script>
